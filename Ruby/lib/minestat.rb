@@ -895,8 +895,8 @@ class MineStat
   # @note Received using SLP 1.7 (JSON) queries
   # @since 2.2.2
   def favicon_b64
-    @favicon_b64 ||= if @json_data['favicon'].nil? || @json_data['favicon'].empty?
-      @json_data['favicon'].split("base64,")[1]
+    @favicon_b64 ||= if json_data['favicon'].nil? || json_data['favicon'].empty?
+      json_data['favicon'].split("base64,")[1]
     end
   end
 
