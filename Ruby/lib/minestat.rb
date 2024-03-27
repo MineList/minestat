@@ -591,7 +591,7 @@ class MineStat
         return retval unless retval == Retval::SUCCESS
         # Perform handshake
         payload = "\x00\x00"
-        payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << @srv_succeeded ? @srv_address : @address
+        payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << (@srv_succeeded ? @srv_address : @address)
         payload += [@srv_succeeded ? @srv_port : @port].pack('n')
         payload += "\x01"
         payload = [payload.length].pack('c') << payload
