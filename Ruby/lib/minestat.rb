@@ -304,7 +304,6 @@ class MineStat
   def connect()
     begin
       if @request_type == Request::BEDROCK || @request_type == "Bedrock/Pocket Edition" || @request_type == "UT3/GS4 Query"
-        @port = DEFAULT_BEDROCK_PORT if @port == DEFAULT_TCP_PORT && @request_type != "UT3/GS4 Query" && @try_all
         start_time = Time.now
         @server = UDPSocket.new
         @server.connect(@address, @port)
