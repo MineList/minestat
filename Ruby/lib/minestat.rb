@@ -217,6 +217,7 @@ class MineStat
     end
     return true
   end
+  private :resolve_a
 
   # Attempts the use of various protocols
   # @param request_type [Request] Protocol used to poll a Minecraft server
