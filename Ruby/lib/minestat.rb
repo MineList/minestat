@@ -160,8 +160,6 @@ class MineStat
     @plugin_list               # list of plugins (UT3/GS4 query only)
     @protocol                  # protocol level
     @json_data                 # JSON data for 1.7 queries
-    @favicon_b64               # base64-encoded favicon possibly contained in JSON 1.7 responses
-    @favicon                   # decoded favicon data
     @latency                   # ping time to server in milliseconds
     # TCP/UDP timeout
     @timeout = options[:timeout] || timeout   
