@@ -170,7 +170,7 @@ class MineStat
     @connection_status         # status of connection ("Success", "Fail", "Timeout", or "Unknown")
     @try_all = false           # try all protocols?
     # debug mode
-    @debug = options[:debug].nil ? false : options[:debug]
+    @debug = options[:debug].nil? ? false : options[:debug]
     # enable SRV resolution?
     @srv_enabled = options[:srv_enabled].nil? ? true : options[:srv_enabled] 
     @srv_succeeded = false     # SRV resolution successful?
