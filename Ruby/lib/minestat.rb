@@ -645,7 +645,6 @@ class MineStat
         @favicon_b64 = json_data['favicon']
         if !@favicon_b64.nil? && !@favicon_b64.empty?
           @favicon_b64 = favicon_b64.split("base64,")[1]
-          @favicon = Base64.decode64(favicon_b64)
         end
         if !@version.empty? && !@motd.empty? && !@current_players.nil? && !@max_players.nil?
           @online = true
@@ -904,7 +903,10 @@ class MineStat
   # Decoded favicon
   # @note Received using SLP 1.7 (JSON) queries
   # @since 2.2.2
-  attr_reader :favicon
+  def favicon
+    @favicon ||= Base64.decode64(@favicon_b64) if @favicon_b64
+  end
+
 
   # Ping time to the server in milliseconds (ms)
   # @since 0.2.1
