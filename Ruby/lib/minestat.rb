@@ -141,11 +141,13 @@ class MineStat
   #   ms = MineStat.new("minecraft.frag.land", 19132, 3, MineStat::Request::BEDROCK, true)
   # @example Attempt all SLP protocols, disable debug mode, and disable DNS SRV resolution
   #   ms = MineStat.new("minecraft.frag.land", 25565, 3, MineStat::Request::SLP, false, false)
-  def initialize(address, port = DEFAULT_TCP_PORT, timeout = DEFAULT_TIMEOUT, request_type = Request::NONE, debug = false, srv_enabled = true)
+  def initialize(address, port = DEFAULT_TCP_PORT, options = {})
+    #, timeout = DEFAULT_TIMEOUT, request_type = Request::NONE, debug = false, srv_enabled = true)
     @address = address         # address of server
     @port = port               # TCP/UDP port of server
     @srv_address               # server address from DNS SRV record
     @srv_port                  # server TCP port from DNS SRV record
+    @resolved_ip               # server IP from A record
     @online                    # online or offline?
     @version                   # server version
     @mode                      # game mode (Bedrock/Pocket Edition only)
@@ -160,17 +162,26 @@ class MineStat
     @favicon_b64               # base64-encoded favicon possibly contained in JSON 1.7 responses
     @favicon                   # decoded favicon data
     @latency                   # ping time to server in milliseconds
-    @timeout = timeout         # TCP/UDP timeout
-    @server                    # server socket
-    @request_type              # protocol version
+    # TCP/UDP timeout
+    @timeout = options[:timeout] || timeout   
+    @server                                   # server socket
+    # protocol version
+    @request_type = options[:request_type] || Request::NONE
     @connection_status         # status of connection ("Success", "Fail", "Timeout", or "Unknown")
     @try_all = false           # try all protocols?
-    @debug = debug             # debug mode
-    @srv_enabled = srv_enabled # enable SRV resolution?
+    # debug mode
+    @debug = options[:debug].nil ? false : options[:debug]
+    # enable SRV resolution?
+    @srv_enabled = options[:srv_enabled].nil? ? true : options[:srv_enabled] 
     @srv_succeeded = false     # SRV resolution successful?
 
     @try_all = true if request_type == Request::NONE
     @srv_succeeded = resolve_srv() if @srv_enabled
+
+    if @address !~ Resolv::AddressRegex || (@srv_enabled && @srv_address !~ Resolv::AddressRegex)
+      resolve_a()
+    end
+
     set_connection_status(attempt_protocols(request_type))
   end
 
@@ -190,6 +201,21 @@ class MineStat
     return true
   end
   private :resolve_srv
+
+  # Attempts to resolve DNS A records
+  # @return [Boolean] Whether or not A record resolution was successful
+  # @since 
+  def resolve_a()
+    begin
+      resolver = Resolv::DNS.new
+      res = resolver.getaddress(@srv_address || @address)
+      @resolved_ip = res.to_s
+    rescue => exception
+      $stderr.puts "resolve_a(): #{exception}" if @debug
+      return false
+    end
+    return true
+  end
 
   # Attempts the use of various protocols
   # @param request_type [Request] Protocol used to poll a Minecraft server
