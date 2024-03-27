@@ -642,10 +642,6 @@ class MineStat
         strip_motd()
         @current_players = json_data['players']['online'].to_i
         @max_players = json_data['players']['max'].to_i
-        @favicon_b64 = json_data['favicon']
-        if !@favicon_b64.nil? && !@favicon_b64.empty?
-          @favicon_b64 = favicon_b64.split("base64,")[1]
-        end
         if !@version.empty? && !@motd.empty? && !@current_players.nil? && !@max_players.nil?
           @online = true
         else
@@ -898,7 +894,12 @@ class MineStat
   # Base64-encoded favicon
   # @note Received using SLP 1.7 (JSON) queries
   # @since 2.2.2
-  attr_reader :favicon_b64
+  def favicon_b64
+    @favicon_b64 ||= if @json_data['favicon'].nil? || @json_data['favicon'].empty?
+      json_data['favicon'].split("base64,")[1]
+    end
+  end
+
 
   # Decoded favicon
   # @note Received using SLP 1.7 (JSON) queries
