@@ -149,7 +149,7 @@ class MineStat
     @srv_address               # server address from DNS SRV record
     @srv_port                  # server TCP port from DNS SRV record
     @resolved_ip               # server IP from A record
-    @online                    # online or offline?
+    @online = false            # online or offline?
     @version                   # server version
     @mode                      # game mode (Bedrock/Pocket Edition only)
     @motd                      # message of the day
@@ -640,7 +640,7 @@ class MineStat
         strip_motd()
         @current_players = json_data['players']['online'].to_i
         @max_players = json_data['players']['max'].to_i
-        if !@version.empty? && !@motd.empty? && !@current_players.nil? && !@max_players.nil?
+        if !@version.empty?
           @online = true
         else
           retval = Retval::UNKNOWN
