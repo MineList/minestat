@@ -835,6 +835,9 @@ class MineStat
   # Port (TCP or UDP) of the Minecraft server
   attr_reader :port
 
+  # resolved IP from DNS
+  attr_reader :resolved_ip
+
   # Address of the Minecraft server from a DNS SRV record
   # @since 3.0.1
   attr_reader :srv_address
