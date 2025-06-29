@@ -640,7 +640,7 @@ class MineStat
         strip_motd()
         @current_players = json_data['players']['online'].to_i
         @max_players = json_data['players']['max'].to_i
-        if !@version.empty?
+        if !@protocol.empty?
           @online = true
         else
           retval = Retval::UNKNOWN
