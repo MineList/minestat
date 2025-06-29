@@ -615,7 +615,8 @@ class MineStat
         retval = connect()
         return retval unless retval == Retval::SUCCESS
         # Perform handshake
-        payload = "\x00\x00"
+        payload = pack_varint(0)
+        payload << pack_varint(760)
         payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << (@srv_succeeded ? @srv_address : @address)
         payload += [@srv_succeeded ? @srv_port : @port].pack('n')
         payload += "\x01"
@@ -697,6 +698,29 @@ class MineStat
     return vint
   end
   private :unpack_varint
+
+  # VarInt 패킹 (최대 32비트)
+  # @param value [Integer] 패킹할 값
+  # @return [String] VarInt로 패킹된 값
+  def pack_varint(value)
+    # unsigned 32비트로 제한 (음수 처리 시 필요)
+    value &= 0xFFFFFFFF
+
+    buf = +""
+    loop do
+      byte = value & 0x7F
+      value >>= 7
+      # continuation 비트(0x80) 붙여야 할지 검사
+      if value != 0
+        buf << (byte | 0x80).chr
+      else
+        buf << byte.chr
+        break
+      end
+    end
+    buf
+  end
+  private :pack_varint
 
   # Bedrock/Pocket Edition (unconnected ping request)
   # @note
