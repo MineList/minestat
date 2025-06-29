@@ -633,6 +633,7 @@ class MineStat
 
         # Parse data
         json_data = JSON.parse(json_data)
+        @online = true
         @json_data = json_data
         @protocol = json_data['version']['protocol'].to_i
         @version = json_data['version']['name']
@@ -640,11 +641,6 @@ class MineStat
         strip_motd()
         @current_players = json_data['players']['online'].to_i
         @max_players = json_data['players']['max'].to_i
-        if @protocol != 0
-          @online = true
-        else
-          retval = Retval::UNKNOWN
-        end
       end
     rescue Timeout::Error
       $stderr.puts "json_request(): Connection timed out" if @debug
