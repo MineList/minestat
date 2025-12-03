@@ -4,7 +4,7 @@ require_relative 'lib/minestat'
 puts "=== MineStat Exception Handling Example ==="
 puts ""
 
-# Example 1: Query with proper parameters (notice we need both address and port)
+# Example 1: Testing exception handling with an unreachable server
 puts "Example 1: Querying an unreachable server"
 ms = MineStat.new("nonexistent-server.example.com", 25565, timeout: 2, debug: false)
 puts "  Server online: #{ms.online}"

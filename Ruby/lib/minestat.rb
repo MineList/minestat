@@ -318,8 +318,8 @@ class MineStat
         end
       end
       @latency = ((Time.now - start_time) * 1000).round
-    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
-      @exception = $!
+    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH => exception
+      @exception = exception
       $stderr.puts "connect(): Host unreachable or connection refused" if @debug
       return Retval::CONNFAIL
     rescue => exception
@@ -472,8 +472,8 @@ class MineStat
         @server.write("\xFE")
         retval = parse_data("\u00A7", true) # section symbol
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "beta_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
@@ -520,8 +520,8 @@ class MineStat
         @server.write("\xFE\x01")
         retval = parse_data("\x00") # null
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "legacy_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
@@ -584,8 +584,8 @@ class MineStat
         @server.write([@port].pack('N'))
         retval = parse_data("\x00") # null
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "extended_legacy_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
@@ -655,12 +655,12 @@ class MineStat
         @current_players = json_data['players']['online'].to_i
         @max_players = json_data['players']['max'].to_i
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "json_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
-    rescue JSON::ParserError
-      @exception = $!
+    rescue JSON::ParserError => exception
+      @exception = exception
       $stderr.puts "json_request(): JSON parse error" if @debug
       return Retval::UNKNOWN
     rescue => exception
@@ -784,8 +784,8 @@ class MineStat
         @server.flush
         retval = parse_data("\x3B") # semicolon
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "bedrock_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
@@ -853,8 +853,8 @@ class MineStat
         end
         retval = parse_data("\x00") # null
       end
-    rescue Timeout::Error
-      @exception = $!
+    rescue Timeout::Error => exception
+      @exception = exception
       $stderr.puts "query_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
@@ -981,6 +981,7 @@ class MineStat
   attr_reader :srv_succeeded
 
   # Last exception encountered during operations
+  # @return [Exception, nil] The most recent exception or nil if no exception occurred
   # @since 3.0.5
   attr_reader :exception
 end
