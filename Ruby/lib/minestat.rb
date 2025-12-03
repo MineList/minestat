@@ -173,6 +173,7 @@ class MineStat
     # enable SRV resolution?
     @srv_enabled = options[:srv_enabled].nil? ? true : options[:srv_enabled] 
     @srv_succeeded = false     # SRV resolution successful?
+    @exception = nil           # last exception encountered
 
     @try_all = true if request_type == Request::NONE
     @srv_succeeded = resolve_srv() if @srv_enabled
@@ -194,6 +195,7 @@ class MineStat
       @srv_address = res.target.to_s # SRV target
       @srv_port = res.port.to_i      # SRV port
     rescue => exception              # primarily catch Resolv::ResolvError and revert if unable to resolve SRV record(s)
+      @exception = exception
       $stderr.puts "resolve_srv(): #{exception}" if @debug
       return false
     end
@@ -210,6 +212,7 @@ class MineStat
       res = resolver.getaddress(@srv_address || @address)
       @resolved_ip = res.to_s
     rescue => exception
+      @exception = exception
       $stderr.puts "resolve_a(): #{exception}" if @debug
       return false
     end
@@ -316,9 +319,11 @@ class MineStat
       end
       @latency = ((Time.now - start_time) * 1000).round
     rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
+      @exception = $!
       $stderr.puts "connect(): Host unreachable or connection refused" if @debug
       return Retval::CONNFAIL
     rescue => exception
+      @exception = exception
       $stderr.puts "connect(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -360,6 +365,7 @@ class MineStat
         end
       end
     rescue => exception
+      @exception = exception
       $stderr.puts "check_response(): #{exception}" if @debug
       return nil, Retval::UNKNOWN
     end
@@ -467,9 +473,11 @@ class MineStat
         retval = parse_data("\u00A7", true) # section symbol
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "beta_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
+      @exception = exception
       $stderr.puts "beta_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -513,9 +521,11 @@ class MineStat
         retval = parse_data("\x00") # null
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "legacy_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
+      @exception = exception
       $stderr.puts "legacy_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -575,9 +585,11 @@ class MineStat
         retval = parse_data("\x00") # null
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "extended_legacy_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
+      @exception = exception
       $stderr.puts "extended_legacy_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -644,12 +656,15 @@ class MineStat
         @max_players = json_data['players']['max'].to_i
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "json_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue JSON::ParserError
+      @exception = $!
       $stderr.puts "json_request(): JSON parse error" if @debug
       return Retval::UNKNOWN
     rescue => exception
+      @exception = exception
       $stderr.puts "json_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -675,6 +690,7 @@ class MineStat
         break if json_data.length >= json_len
       end
     rescue => exception
+      @exception = exception
       $stderr.puts "recv_json(): #{exception}" if @debug
     end
     return json_data
@@ -769,9 +785,11 @@ class MineStat
         retval = parse_data("\x3B") # semicolon
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "bedrock_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
+      @exception = exception
       $stderr.puts "bedrock_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -836,9 +854,11 @@ class MineStat
         retval = parse_data("\x00") # null
       end
     rescue Timeout::Error
+      @exception = $!
       $stderr.puts "query_request(): Connection timed out" if @debug
       return Retval::TIMEOUT
     rescue => exception
+      @exception = exception
       $stderr.puts "query_request(): #{exception}" if @debug
       return Retval::UNKNOWN
     end
@@ -959,4 +979,8 @@ class MineStat
   # Whether or not DNS SRV resolution was successful
   # @since 3.0.2
   attr_reader :srv_succeeded
+
+  # Last exception encountered during operations
+  # @since 3.0.5
+  attr_reader :exception
 end
