@@ -162,7 +162,7 @@ class MineStat
     @json_data                 # JSON data for 1.7 queries
     @latency                   # ping time to server in milliseconds
     # TCP/UDP timeout
-    @timeout = options[:timeout] || timeout   
+    @timeout = options[:timeout] || DEFAULT_TIMEOUT   
     @server                                   # server socket
     # protocol version
     @request_type = options[:request_type] || Request::NONE
@@ -175,14 +175,14 @@ class MineStat
     @srv_succeeded = false     # SRV resolution successful?
     @exception = nil           # last exception encountered
 
-    @try_all = true if request_type == Request::NONE
+    @try_all = true if @request_type == Request::NONE
     @srv_succeeded = resolve_srv() if @srv_enabled
 
     if @address !~ Resolv::AddressRegex || (@srv_enabled && @srv_address !~ Resolv::AddressRegex)
       resolve_a()
     end
 
-    set_connection_status(attempt_protocols(request_type))
+    set_connection_status(attempt_protocols(@request_type))
   end
 
   # Attempts to resolve DNS SRV records
