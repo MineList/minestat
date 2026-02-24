@@ -50,6 +50,10 @@ class MineStat
   # Default TCP/UDP timeout in seconds
   DEFAULT_TIMEOUT = 5
 
+  # Default protocol version used for JSON status handshakes in auto mode.
+  # This preserves the current behavior while keeping future protocol bumps centralized.
+  DEFAULT_JSON_STATUS_PROTOCOL = 760
+
   # Bedrock/Pocket Edition packet offset in bytes (1 + 8 + 8 + 16 + 2)
   #   Unconnected pong (0x1C) = 1 byte
   #   Timestamp as a long = 8 bytes
@@ -128,6 +132,8 @@ class MineStat
   # @param timeout [Integer] TCP/UDP timeout in seconds
   # @param request_type [Request] Protocol used to poll a Minecraft server
   # @param debug [Boolean] Enable or disable error output
+  # @param status_protocol [Integer, Symbol, nil] JSON status handshake protocol
+  #   (`Integer` to force a specific value, `:auto`/`nil` to use the default)
   # @return [MineStat] A MineStat object
   # @example Simply connect to an address
   #   ms = MineStat.new("frag.land")
@@ -159,6 +165,9 @@ class MineStat
     @player_list               # list of players (UT3/GS4 query only)
     @plugin_list               # list of plugins (UT3/GS4 query only)
     @protocol                  # protocol level
+    @requested_protocol        # protocol used in JSON status handshake
+    @response_protocol         # protocol returned by JSON status response
+    @protocol_mismatch         # protocol mismatch between request and response?
     @json_data                 # JSON data for 1.7 queries
     @latency                   # ping time to server in milliseconds
     # TCP/UDP timeout
@@ -168,6 +177,11 @@ class MineStat
     @request_type = options[:request_type] || Request::NONE
     @connection_status         # status of connection ("Success", "Fail", "Timeout", or "Unknown")
     @try_all = false           # try all protocols?
+    # JSON status protocol mode (:auto or Integer)
+    @status_protocol = normalize_status_protocol(options[:status_protocol])
+    @requested_protocol = nil
+    @response_protocol = nil
+    @protocol_mismatch = false
     # debug mode
     @debug = options[:debug].nil? ? false : options[:debug]
     # enable SRV resolution?
@@ -605,6 +619,10 @@ class MineStat
   #     {'players': {'max': 20, 'online': 0},
   #     'version': {'protocol': 404, 'name': '1.13.2'},
   #     'description': {'text': 'A Minecraft Server'}}
+  #
+  #   The response protocol is not always the real backend server protocol.
+  #   Proxy stacks such as Velocity/Bungee may shape status responses from the
+  #   requester protocol, and ViaVersion may rewrite `version.protocol`.
   # @return [Retval] Return value
   # @since 0.3.0
   # @see https://wiki.vg/Server_List_Ping#Current_.281.7.2B.29
@@ -616,7 +634,8 @@ class MineStat
         return retval unless retval == Retval::SUCCESS
         # Perform handshake
         payload = pack_varint(0)
-        payload << pack_varint(760)
+        @requested_protocol = selected_status_protocol
+        payload << pack_varint(@requested_protocol)
         payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << (@srv_succeeded ? @srv_address : @address)
         payload += [@srv_succeeded ? @srv_port : @port].pack('n')
         payload += "\x01"
@@ -636,7 +655,12 @@ class MineStat
         json_data = JSON.parse(json_data)
         @online = true
         @json_data = json_data
-        @protocol = json_data['version']['protocol'].to_i
+        @response_protocol = nil
+        if json_data['version'].is_a?(Hash) && !json_data['version']['protocol'].nil?
+          @response_protocol = json_data['version']['protocol'].to_i
+        end
+        @protocol = @response_protocol
+        @protocol_mismatch = !@response_protocol.nil? && @requested_protocol != @response_protocol
         @version = json_data['version']['name']
         @motd = json_data['description']
         strip_motd()
@@ -721,6 +745,25 @@ class MineStat
     buf
   end
   private :pack_varint
+
+  # Normalizes JSON status protocol selection mode
+  # @param protocol [Integer, Symbol, nil] Protocol selection value
+  # @return [Integer, Symbol] Integer protocol or :auto
+  def normalize_status_protocol(protocol)
+    return :auto if protocol.nil? || protocol == :auto
+    return protocol if protocol.is_a?(Integer)
+
+    raise ArgumentError, "status_protocol must be an Integer, :auto, or nil"
+  end
+  private :normalize_status_protocol
+
+  # Resolves the protocol to use for JSON status handshake
+  # @return [Integer] Protocol version for the handshake
+  def selected_status_protocol
+    return DEFAULT_JSON_STATUS_PROTOCOL if @status_protocol == :auto
+    @status_protocol
+  end
+  private :selected_status_protocol
 
   # Bedrock/Pocket Edition (unconnected ping request)
   # @note
@@ -906,6 +949,17 @@ class MineStat
   # Protocol level
   # @note This is arbitrary and varies by Minecraft version (may also be shared by multiple Minecraft versions)
   attr_reader :protocol
+
+  # Protocol used in the JSON status handshake request
+  # @note `:auto`/`nil` mode uses {DEFAULT_JSON_STATUS_PROTOCOL}
+  attr_reader :requested_protocol
+
+  # Protocol observed in JSON status response (`version.protocol`)
+  # @note In proxy environments (Velocity/Bungee/ViaVersion), this may not match backend server protocol
+  attr_reader :response_protocol
+
+  # Whether requested and response protocols are different
+  attr_reader :protocol_mismatch
 
   # Complete JSON response data
   # @note Received using SLP 1.7 (JSON) queries
