@@ -59,6 +59,25 @@ Attempt all SLP protocols, disable debug mode, and disable DNS SRV resolution:
 ms = MineStat.new("minecraft.frag.land", 25565, 3, MineStat::Request::SLP, false, false)
 ```
 
+### JSON status protocol selection
+
+Use `status_protocol` when you need to control the protocol sent in the >=1.7 JSON status handshake:
+
+```ruby
+# Explicit protocol
+ms = MineStat.new("frag.land", 25565, request_type: MineStat::Request::JSON, status_protocol: 774)
+
+# Auto/default mode (same as nil)
+ms = MineStat.new("frag.land", 25565, request_type: MineStat::Request::JSON, status_protocol: :auto)
+```
+
+After polling:
+- `requested_protocol`: protocol sent in handshake
+- `response_protocol`: protocol from `version.protocol` in response JSON (if present)
+- `protocol_mismatch`: whether request/response protocol values differ
+
+In proxy stacks (Velocity/Bungee) and ViaVersion setups, `version.protocol` may be rewritten or shaped by requester protocol. Do not assume `response_protocol` is always the backend server's real version.
+
 ### Support
 * Discord: https://discord.frag.land
 * GitHub: https://github.com/FragLand/minestat
