@@ -69,6 +69,11 @@ ms = MineStat.new("minecraft.frag.land", 25565,
 
 When `resolved_ip` is provided, MineStat skips its A-record lookup and connects TCP/UDP sockets to that IP. Set `srv_enabled: false` when the caller has already resolved the host and port to avoid all constructor DNS lookups. With SRV resolution enabled, MineStat still looks up the SRV hostname and port; the socket remains pinned to `resolved_ip`.
 
+Limit the JSON status response body to a caller-selected byte budget (the default is 1 MiB):
+```ruby
+ms = MineStat.new("minecraft.frag.land", 25565, max_json_bytes: 524_288)
+```
+
 ### Support
 * Discord: https://discord.frag.land
 * GitHub: https://github.com/FragLand/minestat

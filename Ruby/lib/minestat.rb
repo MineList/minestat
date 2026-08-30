@@ -51,6 +51,17 @@ class MineStat
   # Default TCP/UDP timeout in seconds
   DEFAULT_TIMEOUT = 5
 
+  # Default maximum number of bytes accepted in a JSON status response
+  DEFAULT_MAX_JSON_BYTES = 1_048_576
+
+  # Maximum number of JSON bytes requested from the socket at once
+  JSON_READ_CHUNK_SIZE = 16_384
+  private_constant :JSON_READ_CHUNK_SIZE
+
+  # Packet ID and JSON length are both VarInts
+  MAX_JSON_PACKET_OVERHEAD = MAX_VARINT_SIZE * 2
+  private_constant :MAX_JSON_PACKET_OVERHEAD
+
   # Bedrock/Pocket Edition packet offset in bytes (1 + 8 + 8 + 16 + 2)
   #   Unconnected pong (0x1C) = 1 byte
   #   Timestamp as a long = 8 bytes
@@ -95,6 +106,9 @@ class MineStat
     UNKNOWN = -3
   end
 
+  # Raised internally when a remote server returns an invalid or over-budget response
+  class ProtocolError < StandardError; end
+
   # These constants represent the various protocols used when requesting server data
   module Request
     # Try everything
@@ -130,6 +144,7 @@ class MineStat
   # @param request_type [Request] Protocol used to poll a Minecraft server
   # @param debug [Boolean] Enable or disable error output
   # @param resolved_ip [String, nil] Optional literal IP address used for the socket connection
+  # @param max_json_bytes [Integer] Maximum JSON status response size in bytes
   # @return [MineStat] A MineStat object
   # @example Simply connect to an address
   #   ms = MineStat.new("frag.land")
@@ -166,6 +181,7 @@ class MineStat
     @latency                   # ping time to server in milliseconds
     # TCP/UDP timeout
     @timeout = options[:timeout] || timeout   
+    @max_json_bytes = normalize_max_json_bytes(options[:max_json_bytes])
     @server                                   # server socket
     # protocol version
     @request_type = options[:request_type] || Request::NONE
@@ -218,6 +234,19 @@ class MineStat
     raise ArgumentError, 'resolved_ip must be a literal IP address'
   end
   private :normalize_resolved_ip
+
+  # Validates the JSON response byte budget
+  # @param max_json_bytes [Integer, nil] Maximum response size or nil for the default
+  # @return [Integer] Validated response size
+  def normalize_max_json_bytes(max_json_bytes)
+    value = max_json_bytes.nil? ? DEFAULT_MAX_JSON_BYTES : max_json_bytes
+    unless value.is_a?(Integer) && value > 0
+      raise ArgumentError, 'max_json_bytes must be a positive Integer'
+    end
+
+    value
+  end
+  private :normalize_max_json_bytes
 
   # Attempts to resolve DNS A records
   # @return [Boolean] Whether or not A record resolution was successful
@@ -633,38 +662,55 @@ class MineStat
   # @see https://wiki.vg/Server_List_Ping#Current_.281.7.2B.29
   def json_request()
     retval = nil
+    deadline = monotonic_now + @timeout.to_f
     begin
       Timeout::timeout(@timeout) do
         retval = connect()
         return retval unless retval == Retval::SUCCESS
-        # Perform handshake
-        payload = pack_varint(0)
-        payload << pack_varint(760)
-        payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << (@srv_succeeded ? @srv_address : @address)
-        payload += [@srv_succeeded ? @srv_port : @port].pack('n')
-        payload += "\x01"
-        payload = [payload.length].pack('c') << payload
-        @server.write(payload)
-        @server.write("\x01\x00")
-        @server.flush
+        begin
+          # Perform handshake
+          payload = pack_varint(0)
+          payload << pack_varint(760)
+          payload += [@srv_succeeded ? @srv_address.length : @address.length].pack('c') << (@srv_succeeded ? @srv_address : @address)
+          payload += [@srv_succeeded ? @srv_port : @port].pack('n')
+          payload += "\x01"
+          payload = [payload.length].pack('c') << payload
+          @server.write(payload)
+          @server.write("\x01\x00")
+          @server.flush
 
-        # Acquire data
-        _total_len = unpack_varint
-        return Retval::UNKNOWN if unpack_varint != 0
-        json_len = unpack_varint
-        json_data = recv_json(json_len)
-        @server.close
+          # Acquire data
+          total_len, = read_varint(deadline)
+          if total_len <= 0 || total_len > @max_json_bytes + MAX_JSON_PACKET_OVERHEAD
+            raise ProtocolError, 'JSON packet length exceeds the configured limit'
+          end
 
-        # Parse data
-        json_data = JSON.parse(json_data)
-        @online = true
-        @json_data = json_data
-        @protocol = json_data['version']['protocol'].to_i
-        @version = json_data['version']['name']
-        @motd = json_data['description']
-        strip_motd()
-        @current_players = json_data['players']['online'].to_i
-        @max_players = json_data['players']['max'].to_i
+          packet_id, packet_id_size = read_varint(deadline)
+          raise ProtocolError, 'Unexpected JSON packet ID' unless packet_id.zero?
+
+          json_len, json_len_size = read_varint(deadline)
+          raise ProtocolError, 'JSON response length exceeds the configured limit' if json_len > @max_json_bytes
+
+          header_size = packet_id_size + json_len_size
+          unless total_len == header_size + json_len
+            raise ProtocolError, 'JSON packet length does not match its payload length'
+          end
+
+          json_data = recv_json(json_len, deadline)
+
+          # Parse data
+          json_data = JSON.parse(json_data)
+          @online = true
+          @json_data = json_data
+          @protocol = json_data['version']['protocol'].to_i
+          @version = json_data['version']['name']
+          @motd = json_data['description']
+          strip_motd()
+          @current_players = json_data['players']['online'].to_i
+          @max_players = json_data['players']['max'].to_i
+        ensure
+          close_server
+        end
       end
     rescue Timeout::Error
       $stderr.puts "json_request(): Connection timed out" if @debug
@@ -686,41 +732,81 @@ class MineStat
 
   # Reads JSON data from the socket
   # @param json_len [Integer] Length of the JSON data received from the Minecraft server
-  # @return [String] JSON data received from the Mincraft server
-  def recv_json(json_len)
-    json_data = ""
-    begin
-      loop do
-        remaining = json_len - json_data.length
-        data = @server.recv(remaining)
-        @server.flush
-        json_data += data
-        break if json_data.length >= json_len
+  # @param deadline [Float] Absolute monotonic deadline
+  # @return [String] JSON data received from the Minecraft server
+  def recv_json(json_len, deadline)
+    json_data = +"".force_encoding('ASCII-8BIT')
+
+    while json_data.bytesize < json_len
+      remaining = json_len - json_data.bytesize
+      read_size = [remaining, JSON_READ_CHUNK_SIZE].min
+      data = with_read_deadline(deadline) { @server.recv(read_size) }
+      if data.nil? || data.empty?
+        raise ProtocolError, 'JSON response ended before the declared length'
       end
-    rescue => exception
-      $stderr.puts "recv_json(): #{exception}" if @debug
+      if data.bytesize > remaining
+        raise ProtocolError, 'JSON response exceeded the declared length'
+      end
+
+      json_data << data
     end
-    return json_data
+
+    json_data
   end
   private :recv_json
 
   # Decodes the value of a varint type
+  # @param deadline [Float, nil] Absolute monotonic deadline
   # @return [Integer] Value decoded from a varint type
   # @see https://en.wikipedia.org/wiki/LEB128
-  def unpack_varint()
-    vint = 0
-    i = 0
-    while i <= MAX_VARINT_SIZE
-      data = @server.read(1)
-      return 0 if data.nil? || data.empty?
-      data = data.ord
-      vint |= (data & 0x7F) << 7 * i
-      break if (data & 0x80) != 128
-      i += 1
-    end
-    return vint
+  def unpack_varint(deadline = nil)
+    deadline ||= monotonic_now + @timeout.to_f
+    read_varint(deadline).first
   end
   private :unpack_varint
+
+  # Decodes a VarInt and reports its encoded byte count
+  # @param deadline [Float] Absolute monotonic deadline
+  # @return [Array<Integer>] Decoded value and byte count
+  def read_varint(deadline)
+    vint = 0
+
+    MAX_VARINT_SIZE.times do |index|
+      data = with_read_deadline(deadline) { @server.read(1) }
+      raise ProtocolError, 'VarInt ended before completion' if data.nil? || data.empty?
+
+      byte = data.getbyte(0)
+      vint |= (byte & 0x7F) << (7 * index)
+      return [vint, index + 1] if (byte & 0x80).zero?
+    end
+
+    raise ProtocolError, 'VarInt exceeds 5 bytes'
+  end
+  private :read_varint
+
+  # Runs one socket read against the shared absolute deadline
+  # @param deadline [Float] Absolute monotonic deadline
+  def with_read_deadline(deadline)
+    remaining = deadline - monotonic_now
+    raise Timeout::Error, 'Minecraft response deadline exceeded' if remaining <= 0
+
+    Timeout::timeout(remaining) { yield }
+  end
+  private :with_read_deadline
+
+  # Returns monotonic time for response deadline calculations
+  def monotonic_now
+    Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  end
+  private :monotonic_now
+
+  # Closes the active socket on every JSON response path
+  def close_server
+    @server.close unless @server.nil?
+  rescue IOError, SystemCallError
+    nil
+  end
+  private :close_server
 
   # VarInt 패킹 (최대 32비트)
   # @param value [Integer] 패킹할 값
@@ -960,6 +1046,9 @@ class MineStat
   # TCP/UDP timeout in seconds
   # @since 0.1.2
   attr_accessor :timeout
+
+  # Maximum number of JSON status response bytes
+  attr_reader :max_json_bytes
 
   # Protocol used to request data from a Minecraft server
   attr_reader :request_type
