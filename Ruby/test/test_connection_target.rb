@@ -10,6 +10,15 @@ class MineStatSrvHarness < MineStat
   end
 end
 
+class MineStatAddressResolutionHarness < MineStat
+  private
+
+  def resolve_a
+    @resolved_ip = '93.184.216.34'
+    true
+  end
+end
+
 class MineStatConnectionTargetTest < Minitest::Test
   include HandshakeDecoder
 
@@ -82,21 +91,22 @@ class MineStatConnectionTargetTest < Minitest::Test
   end
 
   def test_hostname_fallback_remains_when_literal_is_not_provided
-    socket = Object.new
+    socket = FakeJsonSocket.new(status_payload)
     socket_args = nil
 
     TCPSocket.stub(:new, lambda { |*args|
       socket_args = args
       socket
     }) do
-      result = build_connect_harness(
-        address: 'play.example.test',
-        port: 25_565,
-        resolved_ip: nil,
-        request_type: MineStat::Request::JSON
-      ).send(:connect)
+      result = MineStatAddressResolutionHarness.new(
+        'play.example.test',
+        25_565,
+        request_type: MineStat::Request::JSON,
+        srv_enabled: false,
+        timeout: 1
+      )
 
-      assert_equal MineStat::Retval::SUCCESS, result
+      assert_equal true, result.online
     end
 
     assert_equal ['play.example.test', 25_565], socket_args
@@ -116,12 +126,27 @@ class MineStatConnectionTargetTest < Minitest::Test
     assert_equal 'resolved_ip must be a literal IP address', error.message
   end
 
+  def test_resolved_ip_rejects_cidr_ranges
+    error = assert_raises(ArgumentError) do
+      MineStat.new(
+        'play.example.test',
+        25_565,
+        resolved_ip: '8.8.8.8/0',
+        request_type: MineStat::Request::JSON,
+        srv_enabled: false
+      )
+    end
+
+    assert_equal 'resolved_ip must be a literal IP address', error.message
+  end
+
   private
 
   def build_connect_harness(address:, port:, resolved_ip:, request_type:)
     instance = MineStat.allocate
     instance.instance_variable_set(:@address, address)
     instance.instance_variable_set(:@port, port)
+    instance.instance_variable_set(:@connection_ip, resolved_ip)
     instance.instance_variable_set(:@resolved_ip, resolved_ip)
     instance.instance_variable_set(:@request_type, request_type)
     instance.instance_variable_set(:@srv_enabled, false)

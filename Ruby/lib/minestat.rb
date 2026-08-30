@@ -150,7 +150,8 @@ class MineStat
     @port = port || DEFAULT_TCP_PORT
     @srv_address               # server address from DNS SRV record
     @srv_port                  # server TCP port from DNS SRV record
-    @resolved_ip = normalize_resolved_ip(options[:resolved_ip]) # server IP from A record or caller
+    @connection_ip = normalize_resolved_ip(options[:resolved_ip]) # caller-pinned socket destination
+    @resolved_ip = @connection_ip # server IP from A record or caller
     @online = false            # online or offline?
     @version                   # server version
     @mode                      # game mode (Bedrock/Pocket Edition only)
@@ -209,7 +210,10 @@ class MineStat
   def normalize_resolved_ip(resolved_ip)
     return nil if resolved_ip.nil?
 
-    IPAddr.new(resolved_ip.to_s).to_s
+    literal = resolved_ip.to_s
+    raise ArgumentError, 'resolved_ip must be a literal IP address' if literal.include?('/')
+
+    IPAddr.new(literal).to_s
   rescue IPAddr::InvalidAddressError, IPAddr::AddressFamilyError
     raise ArgumentError, 'resolved_ip must be a literal IP address'
   end
@@ -319,10 +323,10 @@ class MineStat
       if @request_type == Request::BEDROCK || @request_type == "Bedrock/Pocket Edition" || @request_type == "UT3/GS4 Query"
         start_time = Time.now
         @server = UDPSocket.new
-        @server.connect(@resolved_ip || @address, @port)
+        @server.connect(@connection_ip || @address, @port)
       else
         start_time = Time.now
-        connection_address = @resolved_ip || (@srv_enabled && @srv_succeeded ? @srv_address : @address)
+        connection_address = @connection_ip || (@srv_enabled && @srv_succeeded ? @srv_address : @address)
         if @srv_enabled && @srv_succeeded
           @server = TCPSocket.new(connection_address, @srv_port)
         else
