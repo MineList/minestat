@@ -180,7 +180,7 @@ class MineStat
     @json_data                 # JSON data for 1.7 queries
     @latency                   # ping time to server in milliseconds
     # TCP/UDP timeout
-    @timeout = options[:timeout] || timeout   
+    @timeout = options[:timeout] || DEFAULT_TIMEOUT
     @max_json_bytes = normalize_max_json_bytes(options[:max_json_bytes])
     @server                                   # server socket
     # protocol version

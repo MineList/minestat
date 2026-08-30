@@ -70,6 +70,8 @@ Limit the JSON status response body to a caller-selected byte budget (the defaul
 ms = MineStat.new("minecraft.frag.land", 25565, max_json_bytes: 524_288)
 ```
 
+JSON header and payload reads share the connection timeout, which defaults to 5 seconds.
+
 ### Support
 * Discord: https://discord.frag.land
 * GitHub: https://github.com/FragLand/minestat
