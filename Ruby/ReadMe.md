@@ -58,6 +58,12 @@ Attempt all SLP protocols, disable debug mode, and disable DNS SRV resolution:
 ```ruby
 ms = MineStat.new("minecraft.frag.land", 25565, 3, MineStat::Request::SLP, false, false)
 ```
+Connect the socket to a previously resolved literal IP while keeping the hostname in the protocol handshake:
+```ruby
+ms = MineStat.new("minecraft.frag.land", 25565, resolved_ip: "203.0.113.10")
+```
+
+`resolved_ip` must be an IPv4 or IPv6 literal. MineStat does not apply a public/private address policy; callers that accept untrusted destinations should validate the literal before passing it.
 
 ### Support
 * Discord: https://discord.frag.land

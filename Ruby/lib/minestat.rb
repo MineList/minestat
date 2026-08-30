@@ -17,6 +17,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 require 'base64'
+require 'ipaddr'
 require 'json'
 require 'resolv'
 require 'socket'
@@ -128,6 +129,7 @@ class MineStat
   # @param timeout [Integer] TCP/UDP timeout in seconds
   # @param request_type [Request] Protocol used to poll a Minecraft server
   # @param debug [Boolean] Enable or disable error output
+  # @param resolved_ip [String, nil] Optional literal IP address used for the socket connection
   # @return [MineStat] A MineStat object
   # @example Simply connect to an address
   #   ms = MineStat.new("frag.land")
@@ -148,7 +150,7 @@ class MineStat
     @port = port || DEFAULT_TCP_PORT
     @srv_address               # server address from DNS SRV record
     @srv_port                  # server TCP port from DNS SRV record
-    @resolved_ip               # server IP from A record
+    @resolved_ip = normalize_resolved_ip(options[:resolved_ip]) # server IP from A record or caller
     @online = false            # online or offline?
     @version                   # server version
     @mode                      # game mode (Bedrock/Pocket Edition only)
@@ -177,7 +179,7 @@ class MineStat
     @try_all = true if request_type == Request::NONE
     @srv_succeeded = resolve_srv() if @srv_enabled
 
-    if @address !~ Resolv::AddressRegex || (@srv_enabled && @srv_address !~ Resolv::AddressRegex)
+    if @resolved_ip.nil? && (@address !~ Resolv::AddressRegex || (@srv_enabled && @srv_address !~ Resolv::AddressRegex))
       resolve_a()
     end
 
@@ -200,6 +202,18 @@ class MineStat
     return true
   end
   private :resolve_srv
+
+  # Validates and normalizes a caller-provided socket destination
+  # @param resolved_ip [String, nil] Literal IPv4 or IPv6 address
+  # @return [String, nil] Normalized literal IP address
+  def normalize_resolved_ip(resolved_ip)
+    return nil if resolved_ip.nil?
+
+    IPAddr.new(resolved_ip.to_s).to_s
+  rescue IPAddr::InvalidAddressError, IPAddr::AddressFamilyError
+    raise ArgumentError, 'resolved_ip must be a literal IP address'
+  end
+  private :normalize_resolved_ip
 
   # Attempts to resolve DNS A records
   # @return [Boolean] Whether or not A record resolution was successful
@@ -305,13 +319,14 @@ class MineStat
       if @request_type == Request::BEDROCK || @request_type == "Bedrock/Pocket Edition" || @request_type == "UT3/GS4 Query"
         start_time = Time.now
         @server = UDPSocket.new
-        @server.connect(@address, @port)
+        @server.connect(@resolved_ip || @address, @port)
       else
         start_time = Time.now
+        connection_address = @resolved_ip || (@srv_enabled && @srv_succeeded ? @srv_address : @address)
         if @srv_enabled && @srv_succeeded
-          @server = TCPSocket.new(@srv_address, @srv_port)
+          @server = TCPSocket.new(connection_address, @srv_port)
         else
-          @server = TCPSocket.new(@address, @port)
+          @server = TCPSocket.new(connection_address, @port)
         end
       end
       @latency = ((Time.now - start_time) * 1000).round
