@@ -52,15 +52,19 @@ end
 class MineStatJsonHarness < MineStat
   def initialize(socket, options = {})
     @scripted_socket = socket
+    options = options.dup
+    use_default_timeout = options.delete(:use_default_timeout)
+    defaults = {
+      resolved_ip: '93.184.216.34',
+      request_type: MineStat::Request::JSON,
+      srv_enabled: false
+    }
+    defaults[:timeout] = 1 unless use_default_timeout
+
     super(
       'play.example.test',
       25_565,
-      {
-        resolved_ip: '93.184.216.34',
-        request_type: MineStat::Request::JSON,
-        srv_enabled: false,
-        timeout: 1
-      }.merge(options)
+      defaults.merge(options)
     )
   end
 
@@ -83,6 +87,22 @@ class MineStatJsonResponseLimitsTest < Minitest::Test
 
     assert_equal true, result.online
     assert_equal [16_384, payload.bytesize - 16_384], socket.recv_calls
+    assert_equal true, socket.closed?
+  end
+
+  def test_default_timeout_allows_a_normal_response
+    payload = status_payload
+    socket = response_socket(payload)
+
+    result = MineStatJsonHarness.new(
+      socket,
+      max_json_bytes: payload.bytesize,
+      use_default_timeout: true
+    )
+
+    assert_equal true, result.online
+    assert_equal MineStat::DEFAULT_TIMEOUT, result.timeout
+    assert_equal 'Success', result.connection_status
     assert_equal true, socket.closed?
   end
 
