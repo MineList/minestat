@@ -322,7 +322,11 @@ class MineStat
     begin
       if @request_type == Request::BEDROCK || @request_type == "Bedrock/Pocket Edition" || @request_type == "UT3/GS4 Query"
         start_time = Time.now
-        @server = UDPSocket.new
+        if @connection_ip && IPAddr.new(@connection_ip).ipv6?
+          @server = UDPSocket.new(Socket::AF_INET6)
+        else
+          @server = UDPSocket.new
+        end
         @server.connect(@connection_ip || @address, @port)
       else
         start_time = Time.now

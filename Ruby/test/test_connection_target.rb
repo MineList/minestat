@@ -90,6 +90,29 @@ class MineStatConnectionTargetTest < Minitest::Test
     socket.verify
   end
 
+  def test_udp_uses_ipv6_socket_for_ipv6_pin
+    socket = Minitest::Mock.new
+    socket.expect(:connect, nil, ['2001:db8::1', 19_132])
+    socket_family = nil
+
+    UDPSocket.stub(:new, lambda { |family = nil|
+      socket_family = family
+      socket
+    }) do
+      result = build_connect_harness(
+        address: 'bedrock.example.test',
+        port: 19_132,
+        resolved_ip: '2001:db8::1',
+        request_type: MineStat::Request::BEDROCK
+      ).send(:connect)
+
+      assert_equal MineStat::Retval::SUCCESS, result
+    end
+
+    assert_equal Socket::AF_INET6, socket_family
+    socket.verify
+  end
+
   def test_hostname_fallback_remains_when_literal_is_not_provided
     socket = FakeJsonSocket.new(status_payload)
     socket_args = nil
