@@ -1,5 +1,6 @@
 require 'json'
 require 'minitest/autorun'
+require 'minitest/mock'
 require_relative '../lib/minestat'
 
 class FakeJsonSocket

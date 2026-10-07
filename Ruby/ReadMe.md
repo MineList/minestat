@@ -60,10 +60,14 @@ ms = MineStat.new("minecraft.frag.land", 25565, 3, MineStat::Request::SLP, false
 ```
 Connect the socket to a previously resolved literal IP while keeping the hostname in the protocol handshake:
 ```ruby
-ms = MineStat.new("minecraft.frag.land", 25565, resolved_ip: "203.0.113.10")
+ms = MineStat.new("minecraft.frag.land", 25565,
+  resolved_ip: "203.0.113.10", srv_enabled: false,
+  request_type: MineStat::Request::JSON, timeout: 5)
 ```
 
 `resolved_ip` must be an IPv4 or IPv6 literal. MineStat does not apply a public/private address policy; callers that accept untrusted destinations should validate the literal before passing it.
+
+When `resolved_ip` is provided, MineStat skips its A-record lookup and connects TCP/UDP sockets to that IP. Set `srv_enabled: false` when the caller has already resolved the host and port to avoid all constructor DNS lookups. With SRV resolution enabled, MineStat still looks up the SRV hostname and port; the socket remains pinned to `resolved_ip`.
 
 ### Support
 * Discord: https://discord.frag.land

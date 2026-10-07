@@ -22,7 +22,7 @@ end
 class MineStatConnectionTargetTest < Minitest::Test
   include HandshakeDecoder
 
-  def test_tcp_uses_pinned_literal_and_preserves_hostname_handshake
+  def test_tcp_skips_dns_and_preserves_hostname_handshake_with_pinned_literal
     socket = FakeJsonSocket.new(status_payload)
     socket_args = nil
 
@@ -30,21 +30,46 @@ class MineStatConnectionTargetTest < Minitest::Test
       socket_args = args
       socket
     }) do
-      result = MineStat.new(
-        'play.example.test',
-        25_565,
-        resolved_ip: '93.184.216.34',
-        request_type: MineStat::Request::JSON,
-        srv_enabled: false,
-        timeout: 1
-      )
+      Resolv::DNS.stub(:new, lambda { flunk 'pinned connections must not query DNS' }) do
+        result = MineStat.new(
+          'play.example.test',
+          25_565,
+          resolved_ip: '93.184.216.34',
+          request_type: MineStat::Request::JSON,
+          srv_enabled: false,
+          timeout: 1
+        )
 
-      assert_equal true, result.online
+        assert_equal true, result.online
+        assert_equal '93.184.216.34', result.resolved_ip
+      end
     end
 
     assert_equal ['93.184.216.34', 25_565], socket_args
     assert_equal 'play.example.test', decode_handshake(socket.writes.first)[:host]
     assert_equal 25_565, decode_handshake(socket.writes.first)[:port]
+  end
+
+  def test_failed_pinned_connection_does_not_fall_back_to_dns
+    TCPSocket.stub(:new, lambda { |address, port|
+      assert_equal ['93.184.216.34', 25_565], [address, port]
+      raise Errno::ECONNREFUSED
+    }) do
+      Resolv::DNS.stub(:new, lambda { flunk 'failed pinned connections must not query DNS' }) do
+        result = MineStat.new(
+          'play.example.test',
+          25_565,
+          resolved_ip: '93.184.216.34',
+          request_type: MineStat::Request::JSON,
+          srv_enabled: false,
+          timeout: 1
+        )
+
+        assert_equal false, result.online
+        assert_equal 'Fail', result.connection_status
+        assert_equal '93.184.216.34', result.resolved_ip
+      end
+    end
   end
 
   def test_tcp_uses_pinned_literal_and_preserves_srv_handshake
@@ -72,19 +97,33 @@ class MineStatConnectionTargetTest < Minitest::Test
     assert_equal 25_570, decode_handshake(socket.writes.first)[:port]
   end
 
-  def test_udp_uses_pinned_literal
+  def test_bedrock_skips_dns_and_uses_pinned_literal
+    server_id = 'MCPE;Hello world;766;1.21.50;1;20;123;Test server;Survival;1;19132;19133'
+    pong = "\x1c" + "\x00" * 32 + [server_id.bytesize].pack('n') + server_id
     socket = Minitest::Mock.new
     socket.expect(:connect, nil, ['93.184.216.36', 19_132])
+    socket.expect(:write, nil, [String])
+    socket.expect(:flush, nil)
+    socket.expect(:recv, pong.byteslice(0, 1), [1, Socket::MSG_PEEK])
+    socket.expect(:recv, pong.byteslice(0, 35), [35, Socket::MSG_PEEK])
+    socket.expect(:recv, pong, [pong.bytesize])
+    socket.expect(:close, nil)
 
     UDPSocket.stub(:new, socket) do
-      result = build_connect_harness(
-        address: 'bedrock.example.test',
-        port: 19_132,
-        resolved_ip: '93.184.216.36',
-        request_type: MineStat::Request::BEDROCK
-      ).send(:connect)
+      Resolv::DNS.stub(:new, lambda { flunk 'pinned connections must not query DNS' }) do
+        result = MineStat.new(
+          'bedrock.example.test',
+          19_132,
+          resolved_ip: '93.184.216.36',
+          request_type: MineStat::Request::BEDROCK,
+          srv_enabled: false,
+          timeout: 1
+        )
 
-      assert_equal MineStat::Retval::SUCCESS, result
+        assert_equal true, result.online
+        assert_equal 'Success', result.connection_status
+        assert_equal '93.184.216.36', result.resolved_ip
+      end
     end
 
     socket.verify
