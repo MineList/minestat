@@ -19,7 +19,9 @@
 require 'base64'
 require 'ipaddr'
 require 'json'
+require 'net/http'
 require 'resolv'
+require 'rubygems/version'
 require 'socket'
 require 'timeout'
 
@@ -47,6 +49,9 @@ class MineStat
 
   # Bedrock/Pocket Edition default UDP port
   DEFAULT_BEDROCK_PORT = 19132
+
+  # Maximum uncompressed NetherNet status body (64 KiB).
+  NETHERNET_MAX_RESPONSE_BYTES = 65_536
 
   # Default TCP/UDP timeout in seconds
   DEFAULT_TIMEOUT = 5
@@ -121,6 +126,9 @@ class MineStat
     # SLP only
     # @since 3.0.1
     SLP = 6
+
+    # Bedrock NetherNet HTTP signaling status (explicit opt-in only)
+    NETHERNET = 7
   end
 
   # Instantiates a MineStat object and polls the specified server for information
@@ -130,6 +138,7 @@ class MineStat
   # @param request_type [Request] Protocol used to poll a Minecraft server
   # @param debug [Boolean] Enable or disable error output
   # @param resolved_ip [String, nil] Optional literal IP address used for the socket connection
+  # @param nethernet_scheme [String] "https" (default) or explicit plaintext "http"
   # @return [MineStat] A MineStat object
   # @example Simply connect to an address
   #   ms = MineStat.new("frag.land")
@@ -177,6 +186,12 @@ class MineStat
     @srv_enabled = options[:srv_enabled].nil? ? true : options[:srv_enabled] 
     @srv_succeeded = false     # SRV resolution successful?
 
+    if @request_type == Request::NETHERNET
+      configure_nethernet(port, options)
+      set_connection_status(attempt_protocols(@request_type))
+      return
+    end
+
     @try_all = true if request_type == Request::NONE
     @srv_succeeded = resolve_srv() if @srv_enabled
 
@@ -219,6 +234,118 @@ class MineStat
   end
   private :normalize_resolved_ip
 
+  def configure_nethernet(port, options)
+    unless Net::HTTP.method_defined?(:ipaddr=)
+      raise ArgumentError, 'NetherNet requires Ruby 2.7+ (Net::HTTP#ipaddr=)'
+    end
+    # Earlier parsers can allocate unbounded response headers before our body
+    # limit runs. Check the loaded implementation, including direct lib users;
+    # never silently continue with an unsafe version or activate a second one.
+    unless defined?(Net::HTTP::VERSION) &&
+        Gem::Version.new(Net::HTTP::VERSION) >= Gem::Version.new('0.10.0')
+      raise ArgumentError, 'NetherNet requires net-http >= 0.10.0; install and load a supported version'
+    end
+    @nethernet_scheme = options.fetch(:nethernet_scheme, 'https')
+    unless ['https', 'http'].include?(@nethernet_scheme)
+      raise ArgumentError, 'nethernet_scheme must be https or http'
+    end
+    @port = port || (@nethernet_scheme == 'https' ? 443 : 80)
+    unless @port.is_a?(Integer) && @port.between?(1, 65_535)
+      raise ArgumentError, 'NetherNet port must be an integer between 1 and 65535'
+    end
+    @timeout = options.fetch(:timeout, DEFAULT_TIMEOUT)
+    unless @timeout.is_a?(Numeric) && @timeout.real? && @timeout.to_f.finite? && @timeout > 0
+      raise ArgumentError, 'NetherNet timeout must be a finite positive number'
+    end
+    # Accept a bare hostname or unbracketed IP, never a URL, path or credentials.
+    unless @address.is_a?(String) && !@address.empty? && @address.ascii_only? &&
+        @address !~ /[\s\x00-\x1f\x7f\/\\@?#\[\]]/
+      raise ArgumentError, 'NetherNet address must be a bare hostname or IP address'
+    end
+    normalize_resolved_ip(@address) if @address.include?(':')
+    @srv_enabled = false # Minecraft Java SRV records do not apply to HTTP signaling.
+  end
+  private :configure_nethernet
+
+  # One bounded status request. Keep the hostname in Net::HTTP's address so
+  # Host, SNI and certificate verification use it; ipaddr pins only the socket.
+  def nethernet_request
+    @request_type = 'Bedrock NetherNet'
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    data, stripped_motd, protocol, current_players, max_players, mode, latency = Timeout.timeout(@timeout) do
+      @resolved_ip = @connection_ip || normalize_resolved_ip(Resolv.getaddress(@address))
+      http = Net::HTTP.new(@address, @port, nil) # Never use environment proxies.
+      http.ipaddr = @resolved_ip
+      http.use_ssl = @nethernet_scheme == 'https'
+      http.verify_mode = OpenSSL::SSL::VERIFY_PEER if http.use_ssl?
+      http.open_timeout = http.read_timeout = http.write_timeout = @timeout
+      http.max_retries = 0
+      request = Net::HTTP::Get.new('/v1/join',
+        'Accept' => 'application/json', 'Accept-Encoding' => 'identity', 'Connection' => 'close')
+      body = +''
+      http.start do
+        http.request(request) do |response|
+          return Retval::UNKNOWN unless response.is_a?(Net::HTTPSuccess)
+          return Retval::UNKNOWN unless response.content_type == 'application/json'
+          return Retval::UNKNOWN unless [nil, 'identity'].include?(response['content-encoding'])
+          length = response.content_length
+          return Retval::UNKNOWN if length && length > NETHERNET_MAX_RESPONSE_BYTES
+          response.read_body do |chunk|
+            return Retval::UNKNOWN if body.bytesize + chunk.bytesize > NETHERNET_MAX_RESPONSE_BYTES
+            body << chunk
+          end
+          return Retval::UNKNOWN if length && body.bytesize != length
+        end
+      end
+      body.force_encoding(Encoding::UTF_8)
+      return Retval::UNKNOWN unless body.valid_encoding?
+      data = JSON.parse(body)
+      return Retval::UNKNOWN unless valid_nethernet_data?(data)
+
+      game_type = data['gameType'].to_i
+      mode = { 0 => 'Survival', 1 => 'Creative', 2 => 'Adventure' }.fetch(game_type, "Unknown (#{game_type})")
+      [data, data['name'].gsub(/§./, ''), data['protocol'].to_i,
+       data['players'].to_i, data['maxPlayers'].to_i, mode,
+       ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round]
+    end
+    # Publish only after validation/conversion succeeds and the timer is stopped.
+    @json_data = data
+    @motd = data['name']
+    @stripped_motd = stripped_motd
+    @protocol = protocol
+    @version = data['version']
+    @level = data['level']
+    @current_players = current_players
+    @max_players = max_players
+    @mode = mode
+    @latency = latency
+    @online = true
+    Retval::SUCCESS
+  rescue Timeout::Error, Errno::ETIMEDOUT => exception
+    $stderr.puts "nethernet_request(): #{exception}" if @debug
+    Retval::TIMEOUT
+  rescue SocketError, Resolv::ResolvError, SystemCallError, OpenSSL::SSL::SSLError => exception
+    $stderr.puts "nethernet_request(): #{exception}" if @debug
+    Retval::CONNFAIL
+  rescue JSON::ParserError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, IOError, ArgumentError => exception
+    $stderr.puts "nethernet_request(): #{exception}" if @debug
+    Retval::UNKNOWN
+  end
+  private :nethernet_request
+
+  def valid_nethernet_data?(data)
+    return false unless data.is_a?(Hash)
+    return false unless %w[name version level].all? do |key|
+      data[key].is_a?(String) && data[key].valid_encoding?
+    end
+
+    %w[protocol players maxPlayers gameType].all? do |key|
+      value = data[key]
+      (value.is_a?(Integer) || value.is_a?(Float)) && value.finite? && value >= 0 && value == value.to_i
+    end
+  end
+  private :valid_nethernet_data?
+
   # Attempts to resolve DNS A records
   # @return [Boolean] Whether or not A record resolution was successful
   # @since 
@@ -250,6 +377,8 @@ class MineStat
         retval = json_request()
       when Request::BEDROCK
         retval = bedrock_request()
+      when Request::NETHERNET
+        retval = nethernet_request()
       when Request::QUERY
         retval = query_request()
       else
@@ -895,6 +1024,9 @@ class MineStat
   # Minecraft server version
   attr_reader :version
 
+  # World name returned by NetherNet status, separate from the game version.
+  attr_reader :level
+
   # Game mode
   # @note Bedrock/Pocket Edition only
   # @since 2.2.0
@@ -931,7 +1063,7 @@ class MineStat
   attr_reader :protocol
 
   # Complete JSON response data
-  # @note Received using SLP 1.7 (JSON) queries
+  # @note Received using SLP 1.7 (JSON) or NetherNet status queries
   # @since 0.3.0
   attr_reader :json_data
 

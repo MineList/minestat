@@ -1,4 +1,5 @@
 require 'json'
+gem 'minitest', '~> 5.0' # This suite uses Minitest 5's mock API.
 require 'minitest/autorun'
 require 'minitest/mock'
 require_relative '../lib/minestat'
