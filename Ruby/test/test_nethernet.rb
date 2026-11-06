@@ -99,8 +99,9 @@ class MineStatNetherNetTest < Minitest::Test
   def assert_offline(result, status)
     refute result.online
     assert_equal status, result.connection_status
-    assert_nil result.motd
-    assert_nil result.json_data
+    %i[motd stripped_motd json_data protocol version level current_players max_players mode latency].each do |field|
+      assert_nil result.public_send(field), "#{field} must remain unset on failure"
+    end
   end
 
   def test_maps_metadata_and_preserves_host_with_pinned_connection
@@ -182,6 +183,42 @@ class MineStatNetherNetTest < Minitest::Test
   def test_accepts_other_success_codes_but_rejects_empty_success
     with_server(response(status: 201)) { |port| assert query(port).online }
     with_server(response('', status: 204)) { |port| assert_offline query(port), 'Unknown' }
+  end
+
+  def test_rejects_unpaired_surrogates_in_all_metadata_strings
+    %w[name version level].each do |field|
+      ['\\udc00', '\\ud800', '\\ud800x'].each do |escaped|
+        body = JSON.generate(metadata.merge(field => 'UNICODE_PLACEHOLDER')).sub('UNICODE_PLACEHOLDER', escaped)
+        assert body.valid_encoding?, 'the wire bytes are valid UTF-8 before JSON decoding'
+        with_server(response(body)) { |port| assert_offline query(port), 'Unknown' }
+      end
+    end
+  end
+
+  def test_accepts_valid_surrogate_pairs_in_metadata_strings
+    body = JSON.generate(metadata.merge('name' => 'UNICODE_PLACEHOLDER',
+      'version' => 'UNICODE_PLACEHOLDER', 'level' => 'UNICODE_PLACEHOLDER'))
+    body = body.gsub('UNICODE_PLACEHOLDER', '\\ud83d\\ude00')
+    with_server(response(body)) do |port|
+      result = query(port)
+      assert result.online
+      assert_equal 'Success', result.connection_status
+      %i[motd stripped_motd version level].each do |field|
+        assert_equal "\u{1f600}", result.public_send(field)
+        assert result.public_send(field).valid_encoding?
+      end
+    end
+  end
+
+  def test_conversion_errors_and_timeouts_do_not_publish_partial_results
+    { ArgumentError => 'Unknown', Timeout::Error => 'Timeout' }.each do |error, status|
+      data = metadata
+      data['name'] = data['name'].dup
+      data['name'].define_singleton_method(:gsub) { |*| raise error, 'conversion interrupted' }
+      with_server do |port|
+        JSON.stub(:parse, data) { assert_offline query(port), status }
+      end
+    end
   end
 
   def test_non_success_and_redirects_do_not_follow_location

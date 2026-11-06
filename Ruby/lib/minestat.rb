@@ -272,7 +272,7 @@ class MineStat
   def nethernet_request
     @request_type = 'Bedrock NetherNet'
     started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    Timeout.timeout(@timeout) do
+    data, stripped_motd, protocol, current_players, max_players, mode, latency = Timeout.timeout(@timeout) do
       @resolved_ip = @connection_ip || normalize_resolved_ip(Resolv.getaddress(@address))
       http = Net::HTTP.new(@address, @port, nil) # Never use environment proxies.
       http.ipaddr = @resolved_ip
@@ -302,18 +302,23 @@ class MineStat
       data = JSON.parse(body)
       return Retval::UNKNOWN unless valid_nethernet_data?(data)
 
-      @json_data = data
-      @motd = data['name']
-      @stripped_motd = @motd.gsub(/§./, '')
-      @protocol = data['protocol'].to_i
-      @version = data['version']
-      @level = data['level']
-      @current_players = data['players'].to_i
-      @max_players = data['maxPlayers'].to_i
       game_type = data['gameType'].to_i
-      @mode = { 0 => 'Survival', 1 => 'Creative', 2 => 'Adventure' }.fetch(game_type, "Unknown (#{game_type})")
-      @latency = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round
+      mode = { 0 => 'Survival', 1 => 'Creative', 2 => 'Adventure' }.fetch(game_type, "Unknown (#{game_type})")
+      [data, data['name'].gsub(/§./, ''), data['protocol'].to_i,
+       data['players'].to_i, data['maxPlayers'].to_i, mode,
+       ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at) * 1000).round]
     end
+    # Publish only after validation/conversion succeeds and the timer is stopped.
+    @json_data = data
+    @motd = data['name']
+    @stripped_motd = stripped_motd
+    @protocol = protocol
+    @version = data['version']
+    @level = data['level']
+    @current_players = current_players
+    @max_players = max_players
+    @mode = mode
+    @latency = latency
     @online = true
     Retval::SUCCESS
   rescue Timeout::Error, Errno::ETIMEDOUT => exception
@@ -322,7 +327,7 @@ class MineStat
   rescue SocketError, Resolv::ResolvError, SystemCallError, OpenSSL::SSL::SSLError => exception
     $stderr.puts "nethernet_request(): #{exception}" if @debug
     Retval::CONNFAIL
-  rescue JSON::ParserError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, EOFError, IOError, ArgumentError => exception
+  rescue JSON::ParserError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, IOError, ArgumentError => exception
     $stderr.puts "nethernet_request(): #{exception}" if @debug
     Retval::UNKNOWN
   end
@@ -330,7 +335,9 @@ class MineStat
 
   def valid_nethernet_data?(data)
     return false unless data.is_a?(Hash)
-    return false unless %w[name version level].all? { |key| data[key].is_a?(String) }
+    return false unless %w[name version level].all? do |key|
+      data[key].is_a?(String) && data[key].valid_encoding?
+    end
 
     %w[protocol players maxPlayers gameType].all? do |key|
       value = data[key]
