@@ -187,12 +187,3 @@ NetherNet tests use local IPv4/IPv6 HTTP and TLS listeners, an ephemeral test
 certificate and an isolated trust store. They require loopback socket access,
 but no external server or DNS access. On Ruby older than 2.7 these tests skip;
 use Ruby 2.7+ to validate NetherNet as well as the existing connection tests.
-
-### MineList integration follow-up
-
-Application integration is separate from this Ruby implementation. MineList's
-`ServerStatusChecker` will need an explicit choice between `BEDROCK` and
-`NETHERNET`, the original signaling hostname, its validated `resolved_ip`, the
-signaling port and the selected HTTP scheme. Its current IP/port throttling
-should also be reviewed for signaling-host-based throttling, since multiple
-virtual hosts can share a signaling IP and port.
