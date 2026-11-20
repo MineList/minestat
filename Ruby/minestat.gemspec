@@ -11,4 +11,6 @@ Gem::Specification.new do |spec|
   spec.files = ["lib/minestat.rb", "example.rb", ".yardopts"]
   spec.extra_rdoc_files = Dir["ChangeLog.md", "License.txt", "ReadMe.md"]
   spec.required_ruby_version = ">= 2.2.0"
+  spec.add_development_dependency "minitest", "~> 5.0"
+  spec.add_development_dependency "net-http", ">= 0.10.0"
 end
