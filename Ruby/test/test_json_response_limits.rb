@@ -101,6 +101,7 @@ class MineStatJsonResponseLimitsTest < Minitest::Test
     )
 
     assert_equal true, result.online
+    assert_nil result.modpack
     assert_equal MineStat::DEFAULT_TIMEOUT, result.timeout
     assert_equal 'Success', result.connection_status
     assert_equal true, socket.closed?
@@ -118,7 +119,7 @@ class MineStatJsonResponseLimitsTest < Minitest::Test
     assert_equal true, socket.closed?
   end
 
-  def test_packet_length_mismatch_is_rejected_before_payload_read
+  def test_trailing_bytes_count_toward_the_payload_limit
     payload = status_payload
     socket = declared_response_socket(
       json_length: payload.bytesize,
@@ -131,6 +132,46 @@ class MineStatJsonResponseLimitsTest < Minitest::Test
     assert_equal false, result.online
     assert_empty socket.recv_calls
     assert_equal true, socket.closed?
+  end
+
+  def test_modpack_extension_from_society_server
+    metadata = '{"releaseType":"unknown","projectId":1093382,"name":"Society: Sunlit Valley","version":"4.1.5A"}'
+    assert_equal 96, metadata.bytesize
+    result = extended_response(status_payload, pack_varint(96) + metadata)
+
+    assert result.online
+    assert_equal JSON.parse(status_payload), result.json_data
+    assert_equal({ 'name' => 'Society: Sunlit Valley', 'version' => '4.1.5A' }, result.modpack)
+  end
+
+  def test_multibyte_name_and_length_prefix
+    name = '한글' * 24
+    metadata = JSON.generate('name' => name, 'version' => '1')
+    result = extended_response(status_payload, pack_varint(metadata.bytesize) + metadata.b)
+
+    assert_equal({ 'name' => name, 'version' => '1' }, result.modpack)
+  end
+
+  def test_unrecognized_extensions_preserve_status
+    bodies = ['{}', '[]', '{', '{"name":5,"version":"1"}', '{"name":"x","version":" "}',
+              "{\"name\":\"\xff\",\"version\":\"1\"}".b]
+    tails = bodies.map { |body| pack_varint(body.bytesize) + body }
+    tails.concat(["\x80".b, "\x80".b * 6, "\x7f{}".b, "\x02{}x".b])
+    tails.each do |tail|
+      result = extended_response(status_payload, tail)
+      assert result.online
+      assert_nil result.modpack
+    end
+  end
+
+  def test_truncated_packet_or_invalid_primary_status_is_rejected
+    refute extended_response(status_payload, 'abc', declared_tail_length: 4).online
+    ['{', '{}', "{\"x\":\"\xff\"}".b].each do |status|
+      refute extended_response(status, 'abc').online
+    end
+    socket = declared_response_socket(json_length: 10, total_length: packet_body_length(9))
+    refute MineStatJsonHarness.new(socket).online
+    assert_empty socket.recv_calls
   end
 
   def test_partial_payload_chunks_are_accumulated_exactly
@@ -208,6 +249,15 @@ class MineStatJsonResponseLimitsTest < Minitest::Test
 
   def monotonic_deadline
     Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
+  end
+
+  def extended_response(payload, tail, declared_tail_length: tail.bytesize)
+    socket = declared_response_socket(
+      json_length: payload.bytesize,
+      total_length: packet_body_length(payload.bytesize) + declared_tail_length,
+      recv_chunks: [payload, tail]
+    )
+    MineStatJsonHarness.new(socket, max_json_bytes: payload.bytesize + declared_tail_length)
   end
 
   def response_socket(payload, recv_chunks: [payload])

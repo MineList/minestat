@@ -820,23 +820,26 @@ class MineStat
           json_len, json_len_size = read_varint(deadline)
           raise ProtocolError, 'JSON response length exceeds the configured limit' if json_len > @max_json_bytes
 
-          header_size = packet_id_size + json_len_size
-          unless total_len == header_size + json_len
+          payload_len = total_len - packet_id_size - json_len_size
+          raise ProtocolError, 'JSON packet payload exceeds the configured limit' if payload_len > @max_json_bytes
+          if payload_len < json_len
             raise ProtocolError, 'JSON packet length does not match its payload length'
           end
 
-          json_data = recv_json(json_len, deadline)
+          status = recv_json(json_len, deadline).force_encoding(Encoding::UTF_8)
+          trailing = recv_json(payload_len - json_len, deadline)
+          raise ProtocolError, 'Invalid status UTF-8' unless status.valid_encoding?
 
-          # Parse data
-          json_data = JSON.parse(json_data)
-          @online = true
-          @json_data = json_data
+          json_data = JSON.parse(status)
           @protocol = json_data['version']['protocol'].to_i
           @version = json_data['version']['name']
           @motd = json_data['description']
           strip_motd()
           @current_players = json_data['players']['online'].to_i
           @max_players = json_data['players']['max'].to_i
+          @modpack = parse_modpack(trailing)
+          @json_data = json_data
+          @online = true
         ensure
           close_server
         end
@@ -858,6 +861,29 @@ class MineStat
     return retval
   end
   private :json_request
+
+  # Some Java servers append a single length-prefixed UTF-8 JSON object.
+  def parse_modpack(trailing)
+    return if trailing.empty?
+
+    length, prefix_size = decode_varint { |index| trailing.getbyte(index) }
+    return unless length == trailing.bytesize - prefix_size
+
+    body = trailing.byteslice(prefix_size, length).force_encoding(Encoding::UTF_8)
+    return unless body.valid_encoding?
+
+    metadata = JSON.parse(body)
+    return unless metadata.is_a?(Hash)
+    return unless %w[name version].all? do |key|
+      value = metadata[key]
+      value.is_a?(String) && value.valid_encoding? && !value.strip.empty?
+    end
+
+    { 'name' => metadata['name'], 'version' => metadata['version'] }
+  rescue ProtocolError, JSON::ParserError
+    nil
+  end
+  private :parse_modpack
 
   # Reads JSON data from the socket
   # @param json_len [Integer] Length of the JSON data received from the Minecraft server
@@ -898,20 +924,24 @@ class MineStat
   # @param deadline [Float] Absolute monotonic deadline
   # @return [Array<Integer>] Decoded value and byte count
   def read_varint(deadline)
+    decode_varint { with_read_deadline(deadline) { @server.read(1) }&.getbyte(0) }
+  end
+  private :read_varint
+
+  def decode_varint
     vint = 0
-
     MAX_VARINT_SIZE.times do |index|
-      data = with_read_deadline(deadline) { @server.read(1) }
-      raise ProtocolError, 'VarInt ended before completion' if data.nil? || data.empty?
+      byte = yield index
+      raise ProtocolError, 'VarInt ended before completion' unless byte
 
-      byte = data.getbyte(0)
+
       vint |= (byte & 0x7F) << (7 * index)
       return [vint, index + 1] if (byte & 0x80).zero?
     end
 
     raise ProtocolError, 'VarInt exceeds 5 bytes'
   end
-  private :read_varint
+  private :decode_varint
 
   # Runs one socket read against the shared absolute deadline
   # @param deadline [Float] Absolute monotonic deadline
@@ -1147,6 +1177,9 @@ class MineStat
   # Protocol level
   # @note This is arbitrary and varies by Minecraft version (may also be shared by multiple Minecraft versions)
   attr_reader :protocol
+
+  # Optional Java status extension with string keys 'name' and 'version'.
+  attr_reader :modpack
 
   # Complete JSON response data
   # @note Received using SLP 1.7 (JSON) or NetherNet status queries
